@@ -1,154 +1,138 @@
 # OPlus Tracker
 
+Collection of tools for querying and resolving OTA / SOTA / OPEX update links for OPPO, OnePlus, Realme devices (ColorOS / OxygenOS).
+
+Current scripts:
+
+- `C16_transer.py` → resolves dynamic downloadCheck URLs (expiration handling)
+- `tomboy_pro.py`  → main OTA query tool (full / delta / gray / preview / anti-query bypass)
+- `opex_query.py`  → dedicated OPEX / carrier package query (ColorOS 15/16 business editions)
+- `sota_query.py`  → SOTA (Software OTA / modular APK) query & simulation (mainly CN)
+
 ## `C16_transer.py`
 
-### Features:
-- Parses `Expires` or `x-oss-expires` parameters from URLs to determine link validity.
-- Prints ColorOS 16 Dynamic Decrypt Link information.
+### Features
+- Follows 302 redirects from `downloadCheck?` URLs
+- Parses `Expires` or `x-oss-expires` parameters
+- Displays final download link + expiration time
+- Special focus on ColorOS 16 dynamic links
 
 ### Dependencies
+- `requests`
 
-Required Python packages:
-- [`requests`](https://pypi.org/project/requests/)
-
-Standard library modules used:
-- `urllib.parse`
-- `datetime`
-- `time`
-- `sys`
-
-Install via:
+Install:
 ```bash
 pip install requests
 ```
 
 ### Usage
-
 ```bash
-python C16_transer.py "YOUR_DOWNLOAD_CHECK_URL_HERE"
+python C16_transer.py "https://gauss-componentotacostmanual-cn.allawnfs.com/.../downloadCheck?Expires=1767225599&..."
 ```
-
-The script expects a URL containing `downloadCheck?` (usually returned by OTA query tools).
-
-**Example:**
-```bash
-python C16_transer.py "https://gauss-componentotacostmanual-cn.allawnfs.com/ota/xxx/downloadCheck?Expires=1767225599&..."
-```
-
-It will follow the redirect (302) and show the final download link + expiration time.
 
 ## `tomboy_pro.py`
 
-Advanced OTA update query tool for OPPO / OnePlus / Realme devices (ColorOS / OxygenOS).
-
-Supports querying full OTA, incremental (delta) OTA, preview builds, Genshin Impact special editions, gray mode, OPEX packages, and bypass anti-query mode (introduced ~Oct 2025).
+Main advanced OTA query tool — supports full ROM, delta updates, gray channel, preview builds, Genshin editions, anti-query bypass (post-Oct 2025), etc.
 
 ### Main Features
-- Region-specific OTA servers & RSA public keys
-- RSA-OAEP protected AES key negotiation
-- AES-CTR request/response encryption
-- Automatic suffix completion for partial version input
-- Supports `manual`, `client_auto`, `server_auto`, `taste` modes
-- Delta/incremental OTA query via `--components`
-- OPEX update query support
-- Google check-in simulation (fingerprint mode)
-- Anti-query bypass logic (`--anti 1`) for post-2025 restrictions
+- Region-specific servers & RSA keys
+- RSA-OAEP + AES-CTR encryption
+- Auto suffix completion (`_11.A` / `_11.C` / `_11.F` / `_11.H` / `_11.J`)
+- Modes: `manual`, `client_auto`, `server_auto`, `taste`
+- `--anti 1` bypass for ColorOS 16 restricted models
+- Delta OTA via `--components`
+- Legacy special server fallback (`--special 1`)
+- Google check-in simulation (`--fingerprint`)
 
 ### Dependencies
+```text
+requests
+cryptography
+protobuf   (optional — only for --fingerprint mode)
+```
 
-Required packages:
-- [`requests`](https://pypi.org/project/requests/)
-- [`cryptography`](https://pypi.org/project/cryptography/)
-- [`protobuf`](https://pypi.org/project/protobuf/) *(optional — only needed for Google check-in / fingerprint mode)*
-
-Standard library:
-- `json`, `base64`, `hashlib`, `os`, `sys`, `time`, `random`, `argparse`, `gzip`, `binascii`, `re`, `datetime`
-
-Install:
 ```bash
 pip install -r requirements.txt
 ```
 
 ### Usage
-
 ```bash
-python tomboy_pro.py <OTA_VERSION_PREFIX> <REGION> [options]
+python tomboy_pro.py <OTA_PREFIX> <REGION> [options]
 ```
 
-**Positional arguments:**
-- `OTA_VERSION_PREFIX`  
-  Examples:  
-  - `PJX110`  
-  - `PJX110_11.A`  
-  - `PJX110_11.C.36_1360_202508141954`  
-  - or just model name `PJX110` (will try common suffixes)
+**Positional**
+- `<OTA_PREFIX>`     `PJX110` / `PJX110_11.A` / `PJX110_11.C.36_...`
+- `<REGION>`         `cn` `eu` `in` `sg` `ru` `tr` `th` `gl` `tw` `my` `vn` `id`
 
-- `REGION`  
-  Supported: `cn`, `eu`, `in`, `sg`, `ru`, `tr`, `th`, `gl`, `tw`, `my`, `vn`, `id`
+**Popular flags**
 
-**Important Options:**
+| Flag                  | Meaning                                          | Example / Note                       |
+|-----------------------|--------------------------------------------------|--------------------------------------|
+| `--model`             | Force model                                      | `--model PJX110`                     |
+| `--gray 1`            | Gray/test channel (CN only)                      |                                      |
+| `--mode taste`        | Often used with `--anti 1`                       |                                      |
+| `--genshin 1` / `2`   | Genshin edition (YS / Ovt suffix)                |                                      |
+| `--pre 1`             | Preview build (needs `--guid`)                   |                                      |
+| `--guid 64hex`        | 64-char device GUID                              | Required for pre/taste               |
+| `--components`        | Delta query (name:fullversion,...)               | `--components System:PJX110_11...`   |
+| `--anti 1`            | Bypass ColorOS 16 query restriction (~Oct 2025)  | Usually + `--mode taste`             |
+| `--fingerprint`       | Use Google check-in instead                      | OxygenOS / US variant useful         |
 
-| Flag                        | Description                                                                                 | Default    |
-|-----------------------------|---------------------------------------------------------------------------------------------|------------|
-| `--model MODEL`             | Force specific model (overrides auto-detection)                                             | auto       |
-| `--gray 0/1`                | Query gray (test) channel                                                                   | 0          |
-| `--mode MODE`               | Query mode: `manual`, `client_auto`, `server_auto`, `taste`                                 | `manual`   |
-| `--genshin 0/1/2`           | Genshin Impact edition (1=YS, 2=Ovt)                                                        | 0          |
-| `--pre 0/1`                 | Preview / early access build (requires `--guid`)                                            | 0          |
-| `--guid 64hexchars`         | 64-character device GUID (required for pre/taste/guid-specific queries)                     | 000…0      |
-| `--components comp:ver,...` | Query delta/incremental OTA (full version required in value)                                | —          |
-| `--anti 0/1`                | Anti-anti-query mode (helps get ColorOS 16 on some models after Oct 2025 restriction)      | 0          |
-| `--special 0/1`             | Use legacy special CN server (sometimes gets early/old builds)                              | 0          |
-| `--opex 0/1`                | Query OPEX (carrier/business) packages — only CN supported                                  | 0          |
-| `--info "15,oneplus"`       | Required when `--opex 1` — format: `osVersion,brand` (oppo/oneplus/realme)                  | —          |
-| `--fingerprint "..."`       | Use Google check-in API instead of OPlus server (OxygenOS or US Varient)                       | —          |
-
-### Examples
-
-1. Basic query (China)
+**Examples**
 ```bash
+# Basic CN query
 python tomboy_pro.py PJX110_11.A cn
-```
 
-2. Gray mode (China)
-```bash
-python tomboy_pro.py PJX110_11.A cn --gray 1
-```
-
-3. Genshin Impact edition
-```bash
-python tomboy_pro.py PJE110_11.C cn --genshin 1
-```
-
-4. Preview build (requires GUID)
-```bash
-python tomboy_pro.py PJX110_11.A cn --pre 1 --guid 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-```
-
-5. Delta / incremental OTA
-```bash
-python tomboy_pro.py PJX110_11.C.36_1360_202508141954 cn --components System:PJX110_11.C.35_1350_202507201122,OtherComp:1.0.0
-```
-
-6. Anti-query bypass for ColorOS 16 (late 2025+)
-```bash
+# Anti-query bypass for ColorOS 16
 python tomboy_pro.py PLA110_11.A cn --anti 1
+
+# Delta OTA
+python tomboy_pro.py PJX110_11.C.36_1360_20250814 cn --components System:PJX110_11.C.35_...
+
+# Preview with GUID
+python tomboy_pro.py PJX110_11.A cn --pre 1 --guid 0123456789abcdef... (64 chars)
 ```
 
-7. OPEX / carrier package query (CN only)
+## `opex_query.py`
+
+Dedicated tool to query **OPEX** packages (mainly ColorOS 15/16 CN variants).
+
+### Usage
 ```bash
-python tomboy_pro.py PJZ110_11.C.84_1840_202601060309 cn --opex 1 --info "16,oneplus"
+python opex_query.py <FULL_OTA_VERSION> --info <OS_VERSION>,<BRAND>
+
+# Examples
+python opex_query.py PJZ110_11.C.84_1840_202601060309 --info 16,oneplus
+python opex_query.py PJZ110_11.C.85_...               --info 16,oppo
 ```
 
-8. Specific query mode
+**Note**: Requires **complete** OTA version string (at least 3 `_` segments).
+
+## `sota_query.py`
+
+Queries **SOTA** (Software OTA / modular APK updates) — mainly used for CN ColorOS 16 modular component updates.
+
+### Features
+- Simulates device query → gets latest SOTA version & module list
+- Simulates update request → extracts APK module download links
+- Strict parameter validation
+
+### Usage
+All 7 parameters are **required**:
+
 ```bash
-python tomboy_pro.py PJX110 CN --mode taste
+python sota_query.py \
+  --model PJX110 \
+  --brand OnePlus \
+  --ota-version PJX110_11.F.13_2130_202512181912 \
+  --current-sota "V80P02" \
+  --coloros ColorOS16.0.0 \
+  --security-patch 2025-12-01 \
+  --rom-version "PJX110_16.0.2.400(CN01)"
 ```
 
 ### Important Notes (2025–2026)
-
-- Since ~October 2025, OPlus added server-side anti-query restrictions for ColorOS 16 on many models.
-- Using `--anti 1` + base version like `11.A` + `taste` mode can often bypass this.
-- `--opex 1` is currently only supported in China region.
-- Google check-in mode (`--fingerprint`) is useful for OxygenOS global(US Varient) updates.
-- Many dynamic download links expire quickly (usually 10min & 30min). Use `C16_transer.py` to resolve `downloadCheck` URLs.
+- ColorOS 16 introduced strong anti-query restrictions (~Oct 2025). Use `--anti 1` + `taste` mode + base version (e.g. `11.A`) to bypass on many models.
+- Dynamic links from `downloadCheck?` usually expire in **10–30 minutes** — use `C16_transer.py` immediately after getting them.
+- OPEX and SOTA queries are **CN-only** at the moment.
+- All tools regenerate encryption keys / device IDs per request to reduce server-side blocking.
