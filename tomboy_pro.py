@@ -27,11 +27,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from google.protobuf import text_format
 
-OLD_KEYS = ["oppo1997", "baed2017", "java7865", "231uiedn", "09e32ji6",
-            "0oiu3jdy", "0pej387l", "2dkliuyt", "20odiuye", "87j3id7w"]
-
-SPECIAL_SERVER_CN = "https://iota.coloros.com/post/Query_Update"
-
 PUBLIC_KEYS = {
     "cn": """-----BEGIN RSA PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApXYGXQpNL7gmMzzvajHa
@@ -125,7 +120,6 @@ class QueryResult:
     error: Optional[str] = None
     components: List[ComponentInfo] = None
     opex_list: List[OpexInfo] = None
-    used_special_server: bool = False
     published_time: Optional[str] = None
 
 @dataclass
@@ -141,7 +135,6 @@ class QueryConfig:
     has_custom_model: bool = False
     genshin: str = "0"
     pre: str = "0"
-    special: int = 0
     custom_language: Optional[str] = None
     fingerprint: Optional[str] = None
     serial: Optional[str] = None
@@ -165,38 +158,6 @@ def generate_random_string(length: int = 64) -> str:
 
 def generate_random_bytes(length: int) -> bytes:
     return os.urandom(length)
-
-def get_key(key_pseudo: str) -> bytes:
-    return (OLD_KEYS[int(key_pseudo[0])] + key_pseudo[4:12]).encode('utf-8')
-
-def encrypt_ecb(data: str) -> str:
-    key_pseudo = str(random.randint(0, 9)) + ''.join(random.choices(
-        string.ascii_letters + string.digits, k=14))
-    key_real = get_key(key_pseudo)
-
-    cipher = Cipher(algorithms.AES(key_real), modes.ECB(), backend=default_backend())
-    encryptor = cipher.encryptor()
-
-    block_size = 16
-    padding_length = block_size - (len(data) % block_size)
-    padded_data = data.encode('utf-8') + bytes([padding_length] * padding_length)
-    
-    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
-    return base64.b64encode(ciphertext).decode('utf-8') + key_pseudo
-
-def decrypt_ecb(encrypted_data: str) -> str:
-    ciphertext_b64 = encrypted_data[:-15]
-    key_pseudo = encrypted_data[-15:]
-    
-    ciphertext = base64.b64decode(ciphertext_b64)
-    key_real = get_key(key_pseudo)
-
-    cipher = Cipher(algorithms.AES(key_real), modes.ECB(), backend=default_backend())
-    decryptor = cipher.decryptor()
-    
-    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-    padding_length = padded_plaintext[-1]
-    return padded_plaintext[:-padding_length].decode('utf-8')
 
 def generate_protected_key(aes_key: bytes, public_key_pem: str) -> str:
     public_key = serialization.load_pem_public_key(
@@ -400,115 +361,6 @@ class GoogleCheckinProber:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
-def build_special_request_data(config: QueryConfig) -> Tuple[Dict, Dict]:
-    is_cn = config.region.lower() == "cn"
-    lang = 'zh-CN' if is_cn else 'en-EN'
-    
-    rom_parts = config.ota_version.split('_')
-    rom_version = '_'.join(rom_parts[:3]) if len(rom_parts) >= 3 else config.ota_version
-    ota_prefix = '_'.join(rom_parts[:2]) if len(rom_parts) >= 2 else config.ota_version
-    device_id = config.guid if (config.guid and config.guid != "0" * 64) else '0' * 64
-
-    headers = {
-        'language': lang,
-        'newLanguage': lang,
-        'romVersion': rom_version,
-        'otaVersion': config.ota_version,
-        'androidVersion': 'Android10.0',
-        'colorOSVersion': 'ColorOS7',
-        'model': config.model,
-        'infVersion': '1',
-        'operator': 'unknown',
-        'nvCarrier': '10010111' if is_cn else 'unknown',
-        'uRegion': 'CN',
-        'trackRegion': 'CN',
-        'imei': '000000000000000',
-        'imei1': '000000000000000',
-        'deviceId': device_id,
-        'mode': 'client_auto',
-        'version': '1',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'NULL'
-    }
-
-    body = {
-        'language': lang,
-        'romVersion': rom_version,
-        'otaVersion': config.ota_version,
-        'androidVersion': 'Android10.0',
-        'colorOSVersion': 'ColorOS7',
-        'model': config.model,
-        'productName': config.model,
-        'operator': 'unknown',
-        'uRegion': 'CN',
-        'trackRegion': 'CN',
-        'imei': '000000000000000',
-        'imei1': '000000000000000',
-        'mode': '0',
-        'registrationId': 'unknown',
-        'deviceId': device_id,
-        'version': '2',
-        'type': '1',
-        'otaPrefix': ota_prefix,
-        'isRealme': '1' if 'RMX' in config.model else '0',
-        'time': str(int(time.time() * 1000)),
-        'canCheckSelf': '0'
-    }
-    return headers, body
-
-def query_update_special(config: QueryConfig) -> QueryResult:
-    headers, body = build_special_request_data(config)
-    encrypted_body = encrypt_ecb(json.dumps(body))
-    
-    try:
-        response = requests.post(
-            SPECIAL_SERVER_CN, headers=headers, json={"params": encrypted_body}, timeout=30
-        )
-        
-        if response.status_code != 200:
-            return QueryResult(False, response.status_code, error=f"HTTP {response.status_code}", used_special_server=True)
-        
-        resp_json = response.json()
-        if resp_json.get('responseCode', 200) != 200:
-            return QueryResult(False, resp_json.get('responseCode', 200), error=resp_json.get('errMsg'), used_special_server=True)
-            
-        encrypted_resp = resp_json.get('resps', '')
-        if not encrypted_resp:
-            return QueryResult(False, 2004, error="No 'resps' in response", used_special_server=True)
-            
-        decrypted_json = json.loads(decrypt_ecb(encrypted_resp))
-        
-        if fail_reason := decrypted_json.get('checkFailReason'):
-            return QueryResult(False, 2004, error=fail_reason, used_special_server=True)
-
-        desc_raw = decrypted_json.get('description', 'N/A')
-        if isinstance(desc_raw, dict):
-            changelog_text = str(desc_raw)
-        else:
-            changelog_text = str(desc_raw)
-            
-        data = {
-            "changelog": replace_gauss_url(changelog_text),
-            "security_patch": str(decrypted_json.get('googlePatchLevel', 'N/A')).replace('0', 'N/A'),
-            "version": decrypted_json.get('new_version', 'N/A'),
-            "fake_ota_version": decrypted_json.get('new_version', 'N/A'),
-            "ota_version": decrypted_json.get('new_version', 'N/A')
-        }
-        
-        components = []
-        if (down_url := decrypted_json.get('down_url', 'N/A')) != 'N/A':
-            down_url = replace_gauss_url(down_url)
-            components.append(ComponentInfo(
-                name="full_ota", version=data['version'], link=down_url, original_link=down_url,
-                size=decrypted_json.get('patch_size', 'N/A'), md5=decrypted_json.get('patch_md5', 'N/A'), auto_url=down_url
-            ))
-            
-        return QueryResult(True, 200, data=data, components=components, used_special_server=True)
-        
-    except Exception as e:
-        return QueryResult(False, 0, error=f"Special server error: {str(e)}", used_special_server=True)
-
 def process_ota_version(ota_prefix: str, region: str, genshin: str, pre: str, custom_model: Optional[str]) -> Tuple[str, str]:
     parts = ota_prefix.split("_")
     base_model = parts[0]
@@ -566,9 +418,6 @@ def build_request_headers(config: QueryConfig, region_config: Dict, device_id: s
     }
 
 def query_update(config: QueryConfig) -> QueryResult:
-    if config.special == 1 and config.region.lower() == "cn" and config.gray != 1:
-        result = query_update_special(config)
-        if result.success: return result
     public_key, region_config = get_public_key_for_region(config.region, config.gray)
     aes_key = generate_random_bytes(32)
     iv = generate_random_bytes(16)
@@ -588,7 +437,7 @@ def query_update(config: QueryConfig) -> QueryResult:
     if config.components_input:
         request_body["components"] = parse_components(config.components_input)
     cipher_text = aes_ctr_encrypt(json.dumps(request_body).encode(), aes_key, iv)
-    endpoint_ver = "/update/v6" if (config.pre == "1" and config.special != 1) or (config.guid and config.guid != "0"*64) else "/update/v3"
+    endpoint_ver = "/update/v6" if (config.pre == "1") or (config.guid and config.guid != "0"*64) else "/update/v3"
     url = f"https://{region_config['host']}{endpoint_ver}"
     for attempt in range(3):
         try:
@@ -698,7 +547,6 @@ def process_response(response: requests.Response, aes_key: bytes) -> QueryResult
             }
         )
     except Exception as e:
-        import traceback
         return QueryResult(False, status, error=f"Processing failed: {str(e)}")
 
 def display_result(result: QueryResult):
@@ -736,9 +584,6 @@ def display_result(result: QueryResult):
                 if i < len(result.opex_list) - 1:
                     print()
     else:
-        if result.used_special_server:
-            print("\n[Special Server Error]")
-        
         if result.response_code == 2004:
             print("\nNo Result")
         elif result.response_code == 308:
@@ -826,7 +671,6 @@ def parse_args():
     group_ota.add_argument("--guid", default="0"*64, help="Device GUID")
     group_ota.add_argument("--components", help="Custom components (name:version)")
     group_ota.add_argument("--anti", type=int, choices=[0, 1], default=0, help="Anti mode")
-    group_ota.add_argument("--special", type=int, choices=[0, 1], default=0, help="CN Special mode")
     
     args = parser.parse_args()
     
@@ -849,7 +693,7 @@ def main():
             ota_version=args.ota_prefix, model=args.model or "unknown", region=args.region,
             gray=args.gray, mode=args.mode, guid=args.guid, components_input=args.components,
             anti=args.anti, has_custom_model=bool(args.model), genshin=args.genshin, pre=args.pre,
-            special=args.special, custom_language=args.custom_language,
+            custom_language=args.custom_language,
             fingerprint=args.fingerprint, serial=args.serial, imei=args.imei
         )
 
